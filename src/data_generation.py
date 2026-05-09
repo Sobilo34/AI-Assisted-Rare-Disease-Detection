@@ -16,6 +16,7 @@ Purpose:
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from sklearn.datasets import make_classification
 
@@ -103,15 +104,16 @@ def plot_class_distribution(dataset: pd.DataFrame, output_path: Path) -> None:
     """
 
     class_counts = dataset[TARGET_NAME].value_counts().sort_index()
+    bar_heights = np.asarray(class_counts.to_numpy(), dtype=float)
     labels = ["Healthy", "Rare Disease"]
 
     plt.figure(figsize=(7, 5))
-    plt.bar(labels, class_counts.values)
+    plt.bar(labels, bar_heights)
     plt.title("Class Distribution: Rare Disease Detection Dataset")
     plt.xlabel("Class")
     plt.ylabel("Number of Samples")
 
-    for index, value in enumerate(class_counts.values):
+    for index, value in enumerate(bar_heights):
         plt.text(index, value, str(value), ha="center", va="bottom")
 
     plt.tight_layout()
