@@ -1,27 +1,31 @@
 """
 Rare Disease Detection using Machine Learning + SMOTE
 =====================================================
-Handles extreme class imbalance typical in rare disease datasets
-using Synthetic Minority Oversampling Technique (SMOTE).
+Handles extreme class imbalance in REAL WORLD healthcare datasets
+using Synthetic Minority Over-sampling Technique (SMOTE).
 
 Pipeline:
-    1. Synthetic dataset generation (mimics real clinical features)
+    1. Real dataset loading from CSV (5,000 patient records, 99:1 imbalance)
     2. Preprocessing (scaling, encoding)
-    3. SMOTE oversampling on training set only
-    4. Multiple classifiers with cross-validation
-    5. Evaluation: ROC-AUC, PR-AUC, F1, Confusion Matrix
-    6. Feature importance analysis
+    3. Stratified train-test split (preserves class ratio)
+    4. SMOTE oversampling on training set only (prevents leakage)
+    5. Multiple classifiers with cross-validation
+    6. Comprehensive evaluation: ROC-AUC, PR-AUC, F1, Confusion Matrix
+    7. Feature importance analysis
+
+This is the NAIVE PROMPT VERSION - basic instruction.
 """
 
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
+import os
 import warnings
 warnings.filterwarnings("ignore")
-
-from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
@@ -43,86 +47,38 @@ from imblearn.metrics import geometric_mean_score
 
 
 # ─────────────────────────────────────────────
-# 1. SYNTHETIC CLINICAL DATASET
+# 1. LOAD REAL HEALTHCARE DATASET
 # ─────────────────────────────────────────────
 
-def generate_rare_disease_dataset(
-    n_samples: int = 5000,
-    disease_prevalence: float = 0.02,   # 2% prevalence → rare disease
-    n_clinical_features: int = 20,
-    random_state: int = 42,
-) -> pd.DataFrame:
+def load_real_healthcare_dataset() -> pd.DataFrame:
     """
-    Generate a synthetic dataset that mimics clinical data for a rare disease.
-
-    Features include:
-      - Continuous biomarkers (enzyme levels, protein concentrations)
-      - Categorical features (sex, ethnicity, disease stage)
-      - Binary flags (family history, genetic mutation present)
-
-    Parameters
-    ----------
-    n_samples           : Total number of patient records
-    disease_prevalence  : Fraction of positive (disease) cases
-    n_clinical_features : Number of informative biomarker columns
-    random_state        : Reproducibility seed
+    Load real patient data from CSV file.
+    Dataset: 5,000 patient records with 10 clinical features + 1 disease label.
+    Class imbalance: 99% healthy, 1% disease (extremely imbalanced rare disease scenario).
 
     Returns
     -------
-    pd.DataFrame with columns: feature_0..N, sex, ethnicity, family_history,
-                                genetic_mutation, age, label
+    pd.DataFrame with healthcare features and disease_status label.
     """
-    np.random.seed(random_state)
+    csv_path = Path(__file__).parent.parent / "data" / "rare_disease_dataset.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Dataset not found at {csv_path}")
 
-    n_positive = int(n_samples * disease_prevalence)
-    n_negative = n_samples - n_positive
+    df = pd.read_csv(csv_path)
+    print(f"\nDataset loaded from: {csv_path}")
+    print(f"  Shape: {df.shape[0]} samples × {df.shape[1]} features")
+    print(f"  Columns: {list(df.columns)}")
 
-    print(f"Dataset composition:")
-    print(f"  Total samples  : {n_samples}")
-    print(f"  Positive (rare): {n_positive}  ({disease_prevalence*100:.1f}%)")
-    print(f"  Negative       : {n_negative}  ({(1-disease_prevalence)*100:.1f}%)")
-    print(f"  Imbalance ratio: 1 : {n_negative // n_positive}\n")
+    # Check class distribution
+    label_col = df.columns[-1]  # Assume last column is label
+    n_positive = (df[label_col] == 1).sum()
+    n_negative = (df[label_col] == 0).sum()
+    print(f"\nDataset composition:")
+    print(f"  Total samples  : {len(df)}")
+    print(f"  Positive (rare): {n_positive}  ({n_positive/len(df)*100:.2f}%)")
+    print(f"  Negative       : {n_negative}  ({n_negative/len(df)*100:.2f}%)")
+    print(f"  Imbalance ratio: 1 : {n_negative // max(n_positive, 1)}\n")
 
-    # Continuous biomarkers — positive class has shifted mean
-    X_pos = np.random.randn(n_positive, n_clinical_features) + 1.5
-    X_neg = np.random.randn(n_negative, n_clinical_features)
-
-    X = np.vstack([X_pos, X_neg])
-    y = np.array([1] * n_positive + [0] * n_negative)
-
-    feature_names = [f"biomarker_{i:02d}" for i in range(n_clinical_features)]
-    df = pd.DataFrame(X, columns=feature_names)
-
-    # Categorical / demographic features
-    df["age"] = np.clip(
-        np.where(y == 1,
-                 np.random.normal(45, 12, n_samples),
-                 np.random.normal(40, 15, n_samples)),
-        18, 90
-    ).astype(int)
-
-    df["sex"] = np.random.choice(["M", "F"], size=n_samples)
-    df["ethnicity"] = np.random.choice(
-        ["Group_A", "Group_B", "Group_C", "Group_D"], size=n_samples,
-        p=[0.5, 0.25, 0.15, 0.10]
-    )
-
-    # Binary risk flags — correlated with label
-    df["family_history"] = np.where(
-        y == 1,
-        np.random.binomial(1, 0.60, n_samples),
-        np.random.binomial(1, 0.10, n_samples),
-    )
-    df["genetic_mutation"] = np.where(
-        y == 1,
-        np.random.binomial(1, 0.75, n_samples),
-        np.random.binomial(1, 0.05, n_samples),
-    )
-
-    df["label"] = y
-
-    # Shuffle
-    df = df.sample(frac=1, random_state=random_state).reset_index(drop=True)
     return df
 
 
@@ -131,19 +87,14 @@ def generate_rare_disease_dataset(
 # ─────────────────────────────────────────────
 
 def preprocess(df: pd.DataFrame):
-    """Encode categoricals, return X (array), y, feature names."""
+    """Separate features and target, normalize feature names."""
     df = df.copy()
 
-    # Label-encode categorical columns
-    cat_cols = ["sex", "ethnicity"]
-    le = LabelEncoder()
-    for col in cat_cols:
-        encoded = le.fit_transform(df[col])
-        df[col] = pd.Series(encoded, index=df.index)
-
-    y = df["label"].values
-    X = df.drop(columns=["label"]).values
-    feature_names = df.drop(columns=["label"]).columns.tolist()
+    # Assume last column is the target label
+    label_col = df.columns[-1]
+    y = df[label_col].values
+    X = df.drop(columns=[label_col]).values
+    feature_names = df.drop(columns=[label_col]).columns.tolist()
 
     return X, y, feature_names
 
@@ -402,14 +353,17 @@ def _style_ax(ax):
 # ─────────────────────────────────────────────
 
 def run_pipeline(smote_variant_name: str = "SMOTE (standard)"):
+    # Change to repo root for consistent data paths
+    os.chdir(Path(__file__).parent.parent)
+    
     print("=" * 60)
     print("  RARE DISEASE DETECTION  |  ML + SMOTE PIPELINE")
     print("=" * 60)
 
     # ── Data ──────────────────────────────────
-    df = generate_rare_disease_dataset(n_samples=5000, disease_prevalence=0.02)
+    df = load_real_healthcare_dataset()
     X, y, feature_names = preprocess(df)
-    y = np.asarray(y)
+    y = np.asarray(y, dtype=np.int64)
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, stratify=y, random_state=42
